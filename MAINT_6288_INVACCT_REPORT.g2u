@@ -1,0 +1,107 @@
+﻿Program.Sub.Preflight.Start
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+Function.Intrinsic.UI.UsePixels ' Allows you to use Pixels instead of Twips throughout
+v.Local.ssql.Declare
+v.Local.dPatchDt.Declare
+v.Local.sret.Declare
+v.Local.icount.Declare
+v.Local.iloop.Declare
+v.Local.lret.Declare
+v.Local.sfilepath.Declare
+
+F.Intrinsic.debug.enablelogging
+
+F.ODBC.Connection!conC.OpenConnection(V.Ambient.Ccon,V.Ambient.Cuser,V.Ambient.Cpass)
+v.local.ssql.Set("select top 1 AppliedTime from HF_QUEUE where GSVERSION >= '2020.1.20210216.1' order by AppliedTime")
+F.ODBC.Connection!conC.ExecuteAndReturn(v.Local.ssql,v.local.sret)
+F.ODBC.Connection!conC.Close
+
+V.Local.dPatchDt.Set(v.Local.sret)
+F.Intrinsic.Control.If(v.Local.sret.PervasiveDate,<,"2021-02-16")
+	F.Intrinsic.UI.Msgbox("Bad Patch Date not Found")
+	F.Intrinsic.Control.End
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.UI.Msgbox(v.Local.dPatchDt,"Hotfix Date")
+F.Intrinsic.UI.InvokeWaitDialog("Please Wait","Building Invoice Data")
+
+F.ODBC.Connection!conx.OpenConnection(V.Ambient.PDSN,V.Ambient.PUser,V.Ambient.PPass,600)
+
+
+F.Intrinsic.String.Build("select batch_num, invoice from AR_OPEN_ITEMS where batch_code = 10 and batch_num in (select Batch from GL_DETAIL where last_chg_date > '{0}'and tran_type = 10) group by batch_num, invoice;",v.Local.dPatchDt.PervasiveDate,v.Local.ssql)
+F.Data.DataTable.CreateFromSQL("InvcComp","conx",v.Local.ssql,true)
+F.Data.Datatable.AddColumn("InvcComp","BatchDate","String")
+'F.Data.Datatable.AddColumn("InvcComp","BatchTime","String")
+F.Data.Datatable.AddColumn("InvcComp","OrderHistO35Cost","Long")
+F.Data.Datatable.AddColumn("InvcComp","IAUDTO35Cost","String")
+F.Data.Datatable.AddColumn("InvcComp","IAHDTO35Cost","Long")
+F.Data.Datatable.AddColumn("InvcComp","OrderHistC52Cost","Long")
+F.Data.Datatable.AddColumn("InvcComp","IAUDTC52Cost","String")
+F.Data.Datatable.AddColumn("InvcComp","IAHDTC52Cost","Long")
+
+F.Intrinsic.Control.For(v.Local.iCount, 0, v.DataTable.InvcComp.RowCount--, 1)
+	F.Intrinsic.String.Build("select top 1 concat(concat(last_chg_date,' '),last_chg_time) from GL_DETAIL where batch = '{0}' order by last_chg_date desc;",v.DataTable.InvcComp(v.Local.iCount).Batch_num!FieldVal,v.Local.ssql)
+	F.ODBC.Connection!conx.ExecuteAndReturn(v.Local.ssql,v.local.sret)
+	'F.Intrinsic.String.Split(V.Local.sRet,"*!*",V.Local.sRet)
+	F.Intrinsic.Control.If(v.Local.sret,<>,"")
+		F.Data.DataTable.SetValue("InvcComp",v.Local.iCount,"BatchDate",v.Local.sret)
+		'F.Data.DataTable.SetValue("InvcComp",v.Local.iCount,"BatchTime",v.Local.sret(1))
+	F.Intrinsic.Control.EndIf
+	F.Intrinsic.String.Build("select cast(sum(cost*qty_shipped) as numeric(12,2)) from ORDER_HIST_LINE where invoice = '{0}' and Line_type not in ('D','F') and flag_cogs != 'Y'",v.DataTable.InvcComp(v.Local.iCount).Invoice!FieldVal,v.Local.ssql)
+	F.ODBC.Connection!conx.ExecuteAndReturn(v.Local.ssql,v.local.lret)
+	F.Data.DataTable.SetValue("InvcComp",v.Local.iCount,"OrderHistO35Cost",v.Local.lret)
+	F.Intrinsic.String.Build("select cast(sum(cost*qty_shipped) as numeric(12,2)) from ORDER_HIST_LINE where invoice = '{0}' and Line_type not in ('D','F') and flag_cogs = 'Y'",v.DataTable.InvcComp(v.Local.iCount).Invoice!FieldVal,v.Local.ssql)
+	F.ODBC.Connection!conx.ExecuteAndReturn(v.Local.ssql,v.local.lret)
+	F.Data.DataTable.SetValue("InvcComp",v.Local.iCount,"OrderHistC52Cost",v.Local.lret)
+	F.Intrinsic.String.Build("select cast(sum(quantity*cost*-1) as numeric(12,2)) from INVENTORY_AUDIT where Code_transaction = 'O35' and substring(reference_1,8,6) = '{0}';",v.DataTable.InvcComp(v.Local.iCount).Invoice!FieldVal,v.Local.ssql)
+	F.ODBC.Connection!conx.ExecuteAndReturn(v.Local.ssql,v.local.sret)
+	F.Intrinsic.Control.If(v.Local.sret,<>,"")
+		F.Data.DataTable.SetValue("InvcComp",v.Local.iCount,"IAUDTO35Cost",v.Local.sret)
+	F.Intrinsic.Control.EndIf
+	F.Intrinsic.String.Build("select cast(sum(quantity*cost*-1) as numeric(12,2)) from INVENTORY_AUDIT where Code_transaction = 'C52' and substring(reference_1,8,6) = '{0}';",v.DataTable.InvcComp(v.Local.iCount).Invoice!FieldVal,v.Local.ssql)
+	F.ODBC.Connection!conx.ExecuteAndReturn(v.Local.ssql,v.local.sret)
+	F.Intrinsic.Control.If(v.Local.sret,<>,"")
+		F.Data.DataTable.SetValue("InvcComp",v.Local.iCount,"IAUDTC52Cost",v.Local.sret)
+	F.Intrinsic.Control.EndIf
+	'f.Intrinsic.Debug.InvokeDebugger
+	'f.Intrinsic.Debug.Stop
+	F.Intrinsic.String.Build("select cast(sum(CR_Amount) as numeric(12,2)) from GL_INVENTORY_DTLS where post_date > '20210101' and description = 'O35' and substring(REFER_1,8,6) = '{0}' and CR_Amount > 0;",v.DataTable.InvcComp(v.Local.iCount).Invoice!FieldVal,v.Local.ssql)
+	F.ODBC.Connection!conx.ExecuteAndReturn(v.Local.ssql,v.local.lret)
+	'F.Intrinsic.Control.If(v.Local.lret,<>,"")
+		F.Data.DataTable.SetValue("InvcComp",v.Local.iCount,"IAHDTO35Cost",v.Local.lret)
+	'F.Intrinsic.Control.EndIf
+	F.Intrinsic.String.Build("select cast(sum(CR_Amount) as numeric(12,2)) from GL_INVENTORY_DTLS where post_date > '20210101' and description = 'C52' and substring(REFER_1,8,6) = '{0}' and CR_Amount > 0;",v.DataTable.InvcComp(v.Local.iCount).Invoice!FieldVal,v.Local.ssql)
+	F.ODBC.Connection!conx.ExecuteAndReturn(v.Local.ssql,v.local.lret)
+	F.Intrinsic.Control.If(v.Local.lret,<>,"")
+		F.Data.DataTable.SetValue("InvcComp",v.Local.iCount,"IAHDTC52Cost",v.Local.lret)
+	F.Intrinsic.Control.EndIf
+F.Intrinsic.Control.Next(v.Local.iCount)
+	
+F.Intrinsic.UI.CloseWaitDialog
+
+F.Intrinsic.UI.ShowSaveFileDialog("InvcCompare","*.csv","","Select Location To Save Export",V.Local.sFilePath)
+F.Intrinsic.Control.If(V.Local.sFilePath,=,"***CANCEL***")
+F.Intrinsic.Control.EndIf
+
+'Add .csv extension is needed
+F.Intrinsic.String.Right(V.Local.sFilePath,4,V.Local.sRet)
+F.Intrinsic.Control.If(V.Local.sRet,!=,".csv")
+	F.Intrinsic.String.Concat(V.Local.sFilePath,".csv",V.Local.sFilePath)
+F.Intrinsic.Control.EndIf
+
+Function.Data.DataTable.SaveToCSV("InvcComp",V.Local.sfilepath,True)
+
+Function.Data.Datatable.Close("InvcComp")
+
+
+F.ODBC.Connection!conx.Close
+
+F.Intrinsic.Control.End
+Program.Sub.Main.End
+
+Program.Sub.Comments.Start
+${$5$}$3.0.0.0$}$1
+${$6$}$lfrey$}$20210302092216275$}$/MtXutbLn8OdE0bzCqZUp0RePG9RxQEa8C5CNcMgfK8V78MazTlOqILYAywLQ6SlAEZuStidbQ0=
+Program.Sub.Comments.End
